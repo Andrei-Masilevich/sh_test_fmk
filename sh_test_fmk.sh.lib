@@ -1,0 +1,290 @@
+#!/bin/bash
+
+__SH_TEST_FMK_INITILIZED=
+
+# Call before tests
+INIT_SH_TEST_FMK()
+{
+    # Init enviroment
+    if [ -z $SH_TEST_FMK_IGNORE_SIGN ]; then
+        SH_TEST_FMK_IGNORE_SIGN='--'
+    fi
+    SH_TEST_FMK_TMP_FILES=
+    trap "CLEANUP" EXIT
+    __SH_TEST_FMK_INITILIZED=1
+}
+
+TRACE()
+{
+    # Use export SH_TEST_FMK_VERBOSE=1 to show this ouput
+    if [ -z $SH_TEST_FMK_VERBOSE ]; then
+        echo -n
+    else
+        echo ">> $@"
+    fi
+}
+
+MESSAGE()
+{
+    echo "== $@"
+}
+
+# Check condition and summarize result
+#
+#   ASSERT {test name} {condition} {summarize string} {summarize command (for 'false' result)}
+#
+ASSERT()
+{
+    local test_name=${1}
+    shift
+    if eval ${1}; then
+        TRACE
+        echo "* ${test_name}: ${2} - OK"
+    else
+        TRACE
+        echo "* ${test_name}: ${2} - ERROR"
+        if [ -n "${3}" ]; then
+            eval ${3}
+        fi
+        exit 1
+    fi
+}
+
+CLEANUP()
+{
+    if [ -n "${SH_TEST_FMK_TMP_FILES}" ]; then
+        TRACE "Clean up (FMK): ${SH_TEST_FMK_TMP_FILES}"
+        rm -f ${SH_TEST_FMK_TMP_FILES}
+    fi
+}
+
+TEST__()
+{
+    if [ -z $__SH_TEST_FMK_INITILIZED ]; then
+        echo "Initialize SH Test FMK!"
+        exit 1
+    fi
+
+    # TRACE "test_name = \"${1}\""
+    # TRACE "target_bin = \"${2}\""
+    # TRACE "expected_code = \"${3}\""
+    # TRACE "search_pattern = \"${4}\""
+    # TRACE "fd = \"${5}\""
+    # TRACE "expected_result = \"${6}\""
+    # TRACE "command line = [0] = \"${7}\""
+
+    local test_name=${1}
+    shift
+
+    if [[ ! -f $1 || -z $(find ${1} -type f -executable) ]]; then
+        echo "Target binary required!"
+        exit 1
+    fi
+
+    local target_bin=$(realpath ${1})
+    shift
+
+    local expected_code=${1}
+    shift
+    
+    if [[ ! ${expected_code} =~ ^[0-9]+$ && $() ]]; then
+        echo "Invalid output device!"
+        exit 1
+    fi
+    expected_code=$((${expected_code}))
+
+    local search_pattern=${1}
+    shift
+
+    if [ ${search_pattern} == ${SH_TEST_FMK_IGNORE_SIGN} ]; then
+        search_pattern=
+    fi
+    
+    local fd=${1}
+    shift
+
+    if [[ ! ${fd} =~ ^[0-2]$ ]]; then
+        echo "Invalid output device!"
+        exit 1
+    fi
+
+    local expected_result=${1}
+    shift
+
+    if [ ${expected_result} == ${SH_TEST_FMK_IGNORE_SIGN} ]; then
+        expected_result=
+    fi
+
+    local file_tmp=$(mktemp /tmp/test.XXXXXX)
+    SH_TEST_FMK_TMP_FILES="${SH_TEST_FMK_TMP_FILES} ${file_tmp}"
+
+    if [ $fd == 0 ]; then
+        TRACE "${target_bin} $@ 1>${file_tmp} 2>&1"
+        ${target_bin} $@ 1>${file_tmp} 2>&1
+    elif [ $fd == 1 ]; then
+        TRACE "${target_bin} $@ 1>${file_tmp} 2>/dev/null"
+        ${target_bin} $@ 1>${file_tmp} 2>/dev/null
+    elif [ $fd == 2 ]; then
+        TRACE "${target_bin} $@ 2>${file_tmp} 1>/dev/null"
+        ${target_bin} $@ 2>${file_tmp} 1>/dev/null
+    else
+        echo "Invalid output device!"
+        exit 1
+    fi
+
+    ASSERT "${test_name}" "[ $? -eq $expected_code ]" "Application code result" "echo -n '>>>> '; cat ${file_tmp}"
+    local result=
+    if [ -n "${search_pattern}" ]; then
+        # TRACE "cat ${file_tmp} | grep \"${search_pattern}\" | head -n 1 | sed -n \"s/^.*\"${search_pattern}\"\s*\(.*$\)/\1/p\""
+        result=$(cat ${file_tmp} | grep "${search_pattern}" | head -n 1 | sed -n "s/^.*"${search_pattern}"\s*\(.*$\)/\1/p")
+    else
+        result=$(cat ${file_tmp})
+    fi
+    TRACE "RESULT = \"${result}\""
+    if [ -n "${expected_result}" ]; then
+        TRACE "EXPECTED RESULT = \"${expected_result}\""
+        ASSERT "${test_name}" "[ \"${result}\" == \"${expected_result}\" ]" "Application expected result"
+    fi
+}
+
+# Execute external application and compare output $fd
+# (1 - TEST_COUT, 2 - TEST_CERR or both for 0 - TEST_OUTPUT) 
+# with expected string.
+# Use $SH_TEST_FMK_IGNORE_SIGN (default '--') to ignore pattern
+#
+#   TEST_OUTPUT_ {test name} {binary path} ${expected_code} {search pattern} $fd {expected output} {command line arguments}
+#
+TEST_OUTPUT_()
+{
+    local test_name=${1}
+    local target_bin=${2}
+    local expected_code=${3}
+
+    shift; shift; shift
+
+    local search_pattern=${1}
+    local fd=${2}
+    local expected_result=${3}
+
+    shift; shift; shift
+
+    TEST__ "${test_name}" "${target_bin}" "${expected_code}" "${search_pattern}" "${fd}" "${expected_result}" $@
+}
+
+# Execute external application and check exit code.
+#
+#   TEST_RESULT {test name} {binary path} {exit code} {command line arguments}
+#
+TEST_RESULT()
+{
+    local test_name=${1}
+    local target_bin=${2}
+    local expected_code=${3}
+
+    shift; shift; shift
+
+    TEST__ "${test_name}" "${target_bin}" "${expected_code}" '--' 0 '--' $@
+}
+
+TEST_OUTPUT_RESULT()
+{
+    local test_name=${1}
+    local target_bin=${2}
+    local expected_code=${3}
+
+    shift; shift; shift
+
+    local search_pattern=${1}
+    local expected_result=${2}
+
+    shift; shift
+
+    TEST_OUTPUT_ "${test_name}" "${target_bin}" "${expected_code}" "${search_pattern}" 0 "${expected_result}" $@
+}
+
+TEST_COUT_RESULT()
+{
+    local test_name=${1}
+    local target_bin=${2}
+    local expected_code=${3}
+
+    shift; shift; shift
+
+    local search_pattern=${1}
+    local expected_result=${2}
+
+    shift; shift
+
+    TEST_OUTPUT_ "${test_name}" "${target_bin}" "${expected_code}" "${search_pattern}" 1 "${expected_result}" $@
+}
+
+TEST_CERR_RESULT()
+{
+    local test_name=${1}
+    local target_bin=${2}
+    local expected_code=${3}
+
+    shift; shift; shift
+
+    local search_pattern=${1}
+    local expected_result=${2}
+
+    shift; shift
+
+    TEST_OUTPUT_ "${test_name}" "${target_bin}" "${expected_code}" "${search_pattern}" 2 "${expected_result}" $@
+}
+
+TEST()
+{
+    local test_name=${1}
+    local target_bin=${2}
+
+    shift; shift
+
+    TEST_RESULT "${test_name}" "${target_bin}" 0 $@
+}
+
+TEST_OUTPUT()
+{
+    local test_name=${1}
+    local target_bin=${2}
+
+    shift; shift
+
+    local search_pattern=${1}
+    local expected_result=${2}
+
+    shift; shift
+
+    TEST_OUTPUT_RESULT "${test_name}" "${target_bin}" 0 "${search_pattern}" "${expected_result}" $@
+}
+
+TEST_COUT()
+{
+    local test_name=${1}
+    local target_bin=${2}
+
+    shift; shift
+
+    local search_pattern=${1}
+    local expected_result=${2}
+
+    shift; shift
+
+    TEST_COUT_RESULT "${test_name}" "${target_bin}" 0 "${search_pattern}" "${expected_result}" $@
+}
+
+TEST_CERR()
+{
+    local test_name=${1}
+    local target_bin=${2}
+
+    shift; shift
+
+    local search_pattern=${1}
+    local expected_result=${2}
+
+    shift; shift
+
+    TEST_CERR_RESULT "${test_name}" "${target_bin}" 0 "${search_pattern}" "${expected_result}" $@
+}
