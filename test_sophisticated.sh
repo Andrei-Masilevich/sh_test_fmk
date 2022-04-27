@@ -16,13 +16,17 @@ fi
 
 app=$(which ccrypt)
 
+__SZ_FACTOR=6
+__STORE_DATA=1
+
 # Setup environment for particular test
 file_tmp=$(mktemp /tmp/test_sophisticated.XXXXXX)
 SH_TEST_FMK_TMP_FILES="${SH_TEST_FMK_TMP_FILES} ${file_tmp}"
 psw="SECRET"
+
 # Create random several MB size for new file
 rnd=$(date +%s%N | cut -b10-19)
-sz=$((1$rnd / 1024 + 1))
+sz=$((1$rnd / 1024 / $__SZ_FACTOR + 1))
 if (( ${rnd: -1} > 5 )); then
     # to make not odd rest from time to time
     sz=$(($sz * 2))
@@ -41,12 +45,22 @@ check_in=$(sha256sum ${file_tmp}|cut -d ' ' -f 1)
 
 MESSAGE $check_in
 
+if [ ! -z $__STORE_DATA ]; then 
+    cp ${file_tmp} 1.bin
+    xxd 1.bin > 1.bin.xxd
+fi
+
 TEST "Encryption Test" ${app} -K ${psw} -S .~ ${file_tmp}
 
 encrypted_file_tmp=${file_tmp}.~
 SH_TEST_FMK_TMP_FILES="${SH_TEST_FMK_TMP_FILES} ${encrypted_file_tmp}"
 
 ASSERT "Encrypted File Test" "[ -f  ${encrypted_file_tmp} ]" "Encrypted file exists"
+
+if [ ! -z $__STORE_DATA ]; then
+    cp ${encrypted_file_tmp} 2.bin
+    xxd 2.bin > 2.bin.xxd
+fi
 
 ASSERT "Encrypted File Test" "[ ! -f  ${file_tmp} ]" "Encrypted file renamed"
 
@@ -61,6 +75,11 @@ ASSERT "Encrypted File Test" "[ \"$check_in\" != \"$check_out\" ]" "Encrypted fi
 TEST "Decryption Test" ${app} -d -K ${psw} -S .~ ${encrypted_file_tmp}
 
 ASSERT "Decrypted File Test" "[ -f  ${file_tmp} ]" "Decrypted file exists"
+
+if [ ! -z $__STORE_DATA ]; then
+    cp ${file_tmp} 3.bin
+    xxd 3.bin > 3.bin.xxd
+fi
 
 ASSERT "Decrypted File Test" "[ ! -f  ${encrypted_file_tmp} ]" "Decrypted file renamed"
 
